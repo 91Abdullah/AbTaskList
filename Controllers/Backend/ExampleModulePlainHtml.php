@@ -2,12 +2,11 @@
 
 use Doctrine\DBAL\Driver\PDOStatement;
 use Doctrine\ORM\AbstractQuery;
+use Doctrine\ORM\Query;
 use Doctrine\ORM\Query\Expr\Join;
 use Shopware\Components\CSRFWhitelistAware;
-use Shopware\Models\Article\Repository as ArticleRepo;
-use Shopware\Models\Article\SupplierRepository;
-use Shopware\Models\Emotion\Repository as EmotionRepo;
-use Shopware\Models\Form\Repository as FormRepo;
+
+use AbTaskList\Models\Task;
 
 /*
  * (c) shopware AG <info@shopware.com>
@@ -17,18 +16,11 @@ use Shopware\Models\Form\Repository as FormRepo;
  */
 class Shopware_Controllers_Backend_ExampleModulePlainHtml extends Enlight_Controller_Action implements CSRFWhitelistAware
 {
-    /**
-     * @var ArticleRepo
-     */
-    protected $supplierRepository = null;
+    protected $taskRepository = null;
 
-    /**
-     * Emotion repository. Declared for an fast access to the emotion repository.
-     *
-     * @var EmotionRepo
-     * @access private
-     */
-    public static $emotionRepository = null;
+    protected $taskListRepository = null;
+
+    protected $entityManager;
 
     /**
      * @var FormRepo
@@ -46,132 +38,130 @@ class Shopware_Controllers_Backend_ExampleModulePlainHtml extends Enlight_Contro
         $this->View()->assign([ 'csrfToken' => $csrfToken ]);
     }
 
-    /**
-     * Internal helper function to get access to the form repository.
-     *
-     * @return SupplierRepository
-     */
-    private function getSupplierRepository()
+    private function getTaskListRepository()
     {
-        if ($this->supplierRepository === null) {
-            $this->supplierRepository = $this->getModelManager()->getRepository('Shopware\Models\Article\Supplier');
+        if($this->taskListRepository === null) {
+            $this->taskListRepository = $this->getModelManager()->getRepository('AbTaskList\Models\TaskList');
         }
-
-        return $this->supplierRepository;
+        return $this->taskListRepository;
     }
 
-    /**
-     * @return FormRepo
-     */
-    private function getFormRepository()
+    private function getTaskRepository()
     {
-        if ($this->formRepository === null) {
-            $this->formRepository = $this->getModelManager()->getRepository('Shopware\Models\Config\Form');
+        if($this->taskRepository === null) {
+            $this->taskRepository = $this->getModelManager()->getRepository('AbTaskList\Models\Task');
         }
 
-        return $this->formRepository;
+        return $this->taskRepository;
     }
 
-    /**
-     * Helper function to get access on the static declared repository
-     *
-     * @return EmotionRepo
-     */
-    protected function getEmotionRepository()
+    private function getEntityManager()
     {
-        if (self::$emotionRepository === null) {
-            self::$emotionRepository = $this->getModelManager()->getRepository('Shopware\Models\Emotion\Emotion');
+        if ($this->entityManager === null) {
+            $this->entityManager = $this->get('models');
         }
-
-        return self::$emotionRepository;
+        return $this->entityManager;
     }
 
     public function indexAction()
     {
-    }
+        if($this->Request()->getMethod() == 'POST') {
 
-    public function listAction()
-    {
-        $filter = [];
-        $sort = [['property' => 'supplier.name']];
-        $limit = 25;
-        $offset = 0;
+            $params = $this->Request()->getParams();
 
-        $query = $this->getSupplierRepository()->getListQuery($filter, $sort, $limit, $offset);
-        $total = $this->getModelManager()->getQueryCount($query);
-        $suppliers = $query->getArrayResult();
-
-        $this->View()->assign(['suppliers' => $suppliers, 'totalSuppliers' => $total]);
-    }
-
-    public function emotionAction()
-    {
-    }
-
-    public function getEmotionAction()
-    {
-        $this->Front()->Plugins()->Json()->setRenderer();
-
-        $limit = $this->Request()->getParam('limit', null);
-        $offset = $this->Request()->getParam('start', 0);
-        $filter = $this->Request()->getParam('filter', null);
-        $filterBy = $this->Request()->getParam('filterBy', null);
-        $categoryId = $this->Request()->getParam('categoryId', null);
-
-        $query = $this->getEmotionRepository()->getListingQuery($filter, $filterBy, $categoryId);
-
-        $query->setFirstResult($offset)->setMaxResults($limit);
-
-        /**@var $statement PDOStatement */
-        $statement = $query->execute();
-        $emotions = $statement->fetchAll(PDO::FETCH_ASSOC);
-
-        $this->View()->assign(['emotions' => $emotions]);
-    }
-
-    public function configAction()
-    {
-        $repository = $this->getFormRepository();
-
-        $user = Shopware()->Auth()->getIdentity();
-        /** @var $locale \Shopware\Models\Shop\Locale */
-        $locale = $user->locale;
-        $filter = [['property' => 'id', 'value' => 133]];
-
-        /** @var $builder \Shopware\Components\Model\QueryBuilder */
-        $builder = $repository->createQueryBuilder('form')
-            ->select(['form', 'element', 'value', 'elementTranslation', 'formTranslation'])
-            ->leftJoin('form.elements', 'element')
-            ->leftJoin('form.translations', 'formTranslation', Join::WITH, 'formTranslation.localeId = :localeId')
-            ->leftJoin('element.translations', 'elementTranslation', Join::WITH, 'elementTranslation.localeId = :localeId')
-            ->leftJoin('element.values', 'value')
-            ->setParameter("localeId", $locale->getId());
-
-        $builder->addOrderBy((array) $this->Request()->getParam('sort', []))
-            ->addFilter($filter);
-
-        $data = $builder->getQuery()->getOneOrNullResult(AbstractQuery::HYDRATE_ARRAY);
-
-        foreach ($data['elements'] as &$values) {
-            foreach ($values['translations'] as $array) {
-                if ($array['label'] !== null) {
-                    $values['label'] = $array['label'];
-                }
-                if ($array['description'] !== null) {
-                    $values['description'] = $array['description'];
-                }
+            $em = $this->getEntityManager();
+            $params = $this->Request()->getParams();
+            $list = $this->getTaskListRepository()->findOneById($params['id']);
+            $tasks = $list->getTasks();
+            $done = true;
+            if($params['form_method'] !== null && $params['form_method'] == 'mark_undone') {
+                $done = false;
             }
-
-            if (!in_array($values['type'], ['select', 'combo'])) {
-                continue;
+            foreach ($tasks as $key => $task) {
+                $task->setDone($done);
+                $em->flush();
             }
+            $query = $this->getTaskListRepository()->createQueryBuilder('c')->getQuery();
+            $tasks_list = $query->getResult(Query::HYDRATE_ARRAY);
+
+            $this->View()->assign(['task_lists' => $tasks_list,'success' => true, 'done' => $done]);
+        } else {
+            $query = $this->getTaskListRepository()->createQueryBuilder('c')->getQuery();
+            $tasks_list = $query->getResult(Query::HYDRATE_ARRAY);
+
+            $this->View()->assign(['task_lists' => $tasks_list]);
         }
-
-        $this->View()->assign(['data' => $data]);
     }
 
-    public function createSubWindowAction()
+    public function editTaskAction()
     {
+        if($this->Request()->getMethod() == 'POST') {
+            $em = $this->getEntityManager();
+            $params = $this->Request()->getParams();
+            $task = $this->getTaskRepository()->findOneById($params['id']);
+            $task->setName($params['name']);
+            $list = $this->getTaskListRepository()->findOneById($params['taskListId']);
+            $task->setTaskList($list);
+            $params['done'] == 'on' ? $task->setDone(true) : $task->setDone(false);
+            $task->setDescription($params['description']);
+            $task->setCreateDate(new DateTime());
+            $em->flush();
+            $this->View()->assign(['task' => $task, 'success' => true]);
+        } else {
+            $params = $this->Request()->getParams();
+            $task = $this->getTaskRepository()->findOneById($params['id']);
+            $query = $this->getTaskListRepository()->createQueryBuilder('c')->getQuery();
+            $tasks_list = $query->getResult(Query::HYDRATE_ARRAY);
+            $selected = $task->getTaskList();
+            // print_r($task);
+            $this->View()->assign(['task' => $task, 'selected'=>$selected,'task_list' => $tasks_list]);
+        }
+    }
+
+    public function createListAction()
+    {
+        if($this->Request()->getMethod() == 'POST') {
+            $em = $this->getEntityManager();
+            $params = $this->Request()->getParams();
+            $list = new \AbTaskList\Models\TaskList();
+            $list->setCreateDate(new \DateTime());
+            $em->persist($list);
+            $em->flush();
+            $this->View()->assign(['success' => true]);
+        }
+    }
+
+    public function createTaskAction()
+    {
+        //print_r($this->Request()->getMethod());
+        if($this->Request()->getMethod() == 'POST') {
+            $em = $this->getEntityManager();
+            $params = $this->Request()->getParams();
+            $task = new Task();
+            $task->setName($params['name']);
+            $list = $this->getTaskListRepository()->findOneById($params['taskListId']);
+            $task->setTaskList($list);
+            $params['done'] == 'on' ? $task->setDone(true) : $task->setDone(false);
+            $task->setDescription($params['description']);
+            $task->setCreateDate(new DateTime());
+            $em->persist($task);
+            $em->flush();
+            $this->View()->assign(['success' => true]);
+        } else {
+            $query = $this->getTaskListRepository()->createQueryBuilder('c')->getQuery();
+            $tasks = $query->getResult(Query::HYDRATE_ARRAY);
+
+            $this->View()->assign(['task_list' => $tasks]);
+        }
+    }
+
+    public function taskAction()
+    {
+        $query = $this->getTaskRepository()->createQueryBuilder('c')->getQuery();
+        $total = $this->getModelManager()->getQueryCount($query);
+        $tasks = $query->getResult(Query::HYDRATE_ARRAY);
+
+        $this->View()->assign(['tasks' => $tasks, 'totalTasks' => $total]);
     }
 
     public function getWhitelistedCSRFActions()

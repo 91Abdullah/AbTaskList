@@ -4,9 +4,9 @@
 >
     <entries>
         <entry>
-            <name>SwagLightweightModule</name>
-            <label lang="en">SwagLightweightModule</label>
-            <label lang="de">SwagLightweightModule</label>
+            <name>AbTaskList</name>
+            <label lang="en">Abdullah's Task List</label>
+            <label lang="de">Abdullah's Task List</label>
             <controller>ExampleModulePlainHtml</controller>
             <action>index</action>
             <class>sprite-application-block</class>
